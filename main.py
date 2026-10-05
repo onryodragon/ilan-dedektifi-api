@@ -1,125 +1,114 @@
 ﻿from fastapi import FastAPI, Query
-from curl_cffi import requests
-from bs4 import BeautifulSoup
-import urllib.parse
-from typing import List, Optional
+from fastapi.middleware.cors import CORSMiddleware
+from typing import Optional
+import uvicorn
 
-app = FastAPI(title="İlan Dedektifi Aggregator API")
+app = FastAPI(title="İlan Dedektifi API")
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
-}
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-def to_slug(text: str) -> str:
-    mapping = {'ı': 'i', 'İ': 'i', 'ş': 's', 'Ş': 's', 'ğ': 'g', 'Ğ': 'g', 'ü': 'u', 'Ü': 'u', 'ö': 'o', 'Ö': 'o', 'ç': 'c', 'Ç': 'c'}
-    res = text.strip().lower()
-    for k, v in mapping.items():
-        res = res.replace(k, v)
-    return "".join(c if c.isalnum() else '-' for c in res).strip('-')
+def get_sample_listings(city: str, district: str, category: str):
+    return [
+        {
+            "id": "1",
+            "title": f"{city} {district} 2+1 Cadde Üzeri Güvenlikli Rezidans",
+            "price": 20475,
+            "location": f"{city} / {district}",
+            "platform": "Sahibinden",
+            "imageUrl": "https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=800&auto=format&fit=crop&q=80",
+            "originalUrl": "https://www.sahibinden.com",
+            "m2": 110,
+            "trustScore": 92,
+            "sellerType": "Yetkili Gayrimenkul Ofisi",
+            "accountAge": "6 Yıllık Kurumsal Mağaza",
+            "activeListings": "18 Aktif İlan",
+            "firstPublishDate": "3 Gün Önce",
+            "isEDevletVerified": True,
+            "isPhoneVerified": True,
+            "isImageOriginal": True,
+            "imageOriginStatus": "Orijinal Fotoğraflar Doğrulandı",
+            "priceHistory": [
+                {"date": "10 Gün Önce", "price": 23000},
+                {"date": "4 Gün Önce", "price": 21500},
+                {"date": "Bugün", "price": 20475}
+            ]
+        },
+        {
+            "id": "2",
+            "title": f"{city} {district} 3+1 Site İçi Kapalı Otoparklı Ferah Daire",
+            "price": 24500,
+            "location": f"{city} / {district}",
+            "platform": "Hepsiemlak",
+            "imageUrl": "https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=800&auto=format&fit=crop&q=80",
+            "originalUrl": "https://www.hepsiemlak.com",
+            "m2": 135,
+            "trustScore": 88,
+            "sellerType": "Doğrulanmış Bireysel Satıcı",
+            "accountAge": "3 Yıllık Üye",
+            "activeListings": "1 Aktif İlan",
+            "firstPublishDate": "1 Hafta Önce",
+            "isEDevletVerified": True,
+            "isPhoneVerified": True,
+            "isImageOriginal": True,
+            "imageOriginStatus": "Kopya Görsel Bulunmadı",
+            "priceHistory": [
+                {"date": "15 Gün Önce", "price": 26000},
+                {"date": "Bugün", "price": 24500}
+            ]
+        },
+        {
+            "id": "3",
+            "title": f"{city} {district} 1+1 Merkezi Konumda Eşyalı Stüdyo",
+            "price": 14000,
+            "location": f"{city} / {district}",
+            "platform": "Emlakjet",
+            "imageUrl": "https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=800&auto=format&fit=crop&q=80",
+            "originalUrl": "https://www.emlakjet.com",
+            "m2": 55,
+            "trustScore": 79,
+            "sellerType": "Gayrimenkul Danışmanı",
+            "accountAge": "1 Yıllık Üye",
+            "activeListings": "7 Aktif İlan",
+            "firstPublishDate": "Dün",
+            "isEDevletVerified": False,
+            "isPhoneVerified": True,
+            "isImageOriginal": True,
+            "imageOriginStatus": "Orijinal Çekim",
+            "priceHistory": [
+                {"date": "Dün", "price": 14000},
+                {"date": "Bugün", "price": 14000}
+            ]
+        }
+    ]
 
-@app.get("/api/search")
+@app.get("/")
+def read_root():
+    return {"status": "ok", "message": "İlan Dedektifi API Canlı"}
+
+@app.get("/listings")
+@app.get("/api/listings")
 def search_listings(
-    city: str = Query("sakarya"),
-    district: Optional[str] = Query(None),
-    is_rent: bool = Query(True),
-    keyword: Optional[str] = Query(None)
+    city: str = Query(default="Sakarya"),
+    district: str = Query(default="Merkez"),
+    category: str = Query(default="kiralik"),
+    max_budget: Optional[int] = Query(default=None)
 ):
-    results = []
-    city_slug = to_slug(city)
-    district_slug = to_slug(district) if district else None
-    rent_str = "kiralik" if is_rent else "satilik"
-    
-    # 1. EMLAKJET CANLI KAZIMA
-    try:
-        emlakjet_url = f"https://www.emlakjet.com/{rent_str}-konut/{city_slug}"
-        if district_slug:
-            emlakjet_url += f"-{district_slug}"
-        emlakjet_url += "/"
-        
-        resp = requests.get(emlakjet_url, headers=HEADERS, impersonate="chrome120", timeout=12)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, "html.parser")
-            cards = soup.find_all("a", href=lambda h: h and "/ilan/" in h)
-            seen_hrefs = set()
-            
-            for c in cards:
-                href = c.get("href", "")
-                if not href.startswith("http"):
-                    href = "https://www.emlakjet.com" + href
-                if href in seen_hrefs:
-                    continue
-                seen_hrefs.add(href)
-                
-                img = c.find("img")
-                img_src = img.get("src") or img.get("data-src") if img else None
-                if not img_src or "data:image" in img_src:
-                    continue
-                
-                title = img.get("alt") if img and img.get("alt") else c.get_text(strip=True)[:60]
-                
-                # Fiyat
-                text_content = c.get_text()
-                price = 0
-                import re
-                p_match = re.search(r'([0-9]{1,3}(?:\.[0-9]{3})+)\s*(?:TL|₺)', text_content)
-                if p_match:
-                    price = float(p_match.group(1).replace(".", ""))
-                else:
-                    price = 18500.0 if is_rent else 3200000.0
-                    
-                results.append({
-                    "title": title,
-                    "price": price,
-                    "location": f"{city.title()} {district.title() if district else ''}".strip(),
-                    "originalUrl": href,
-                    "imageUrl": img_src,
-                    "platform": "Emlakjet",
-                    "trustScore": 92,
-                    "isEDevletVerified": True,
-                    "isPhoneVerified": True,
-                    "priceHistory": [
-                        {"date": "45 Gün Önce", "price": price * 1.10},
-                        {"date": "30 Gün Önce", "price": price * 1.05},
-                        {"date": "15 Gün Önce", "price": price * 1.02},
-                        {"date": "Bugün", "price": price}
-                    ]
-                })
-    except Exception as e:
-        print(f"Emlakjet error: {e}")
+    items = get_sample_listings(city, district, category)
+    if max_budget is not None and max_budget > 0:
+        items = [i for i in items if i["price"] <= max_budget]
+    return {
+        "count": len(items),
+        "city": city,
+        "district": district,
+        "category": category,
+        "listings": items
+    }
 
-    # 2. HEPSİEMLAK VE SAHİBİNDEN PARALLEL SCRAPING
-    # curl_cffi ile tarayıcı impersonation yapılarak canlı sayfalar çekilir
-    try:
-        hepsi_url = f"https://www.hepsiemlak.com/{city_slug}-{rent_str}"
-        h_resp = requests.get(hepsi_url, headers=HEADERS, impersonate="chrome120", timeout=12)
-        if h_resp.status_code == 200:
-            h_soup = BeautifulSoup(h_resp.text, "html.parser")
-            h_links = h_soup.find_all("a", href=lambda h: h and ("-kiralik/" in h or "-satilik/" in h))
-            for h in h_links[:5]:
-                h_href = h.get("href", "")
-                if not h_href.startswith("http"):
-                    h_href = "https://www.hepsiemlak.com" + h_href
-                h_img = h.find("img")
-                img_url = h_img.get("src") or h_img.get("data-src") if h_img else None
-                if h_href and img_url:
-                    results.append({
-                        "title": (h_img.get("alt") if h_img else None) or f"{city.title()} Hepsiemlak Portföyü",
-                        "price": 20000.0 if is_rent else 3400000.0,
-                        "location": f"{city.title()} / Merkez",
-                        "originalUrl": h_href,
-                        "imageUrl": img_url,
-                        "platform": "Hepsiemlak",
-                        "trustScore": 90,
-                        "isEDevletVerified": True,
-                        "isPhoneVerified": True,
-                        "priceHistory": [
-                            {"date": "30 Gün Önce", "price": 22000.0 if is_rent else 3600000.0},
-                            {"date": "Bugün", "price": 20000.0 if is_rent else 3400000.0}
-                        ]
-                    })
-    except Exception as e:
-        print(f"Hepsiemlak error: {e}")
-
-    return {"status": "ok", "count": len(results), "listings": results}
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
